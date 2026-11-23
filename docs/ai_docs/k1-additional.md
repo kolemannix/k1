@@ -219,7 +219,8 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
     `req.default`, `req.host`, `req.editor`; reads the program's own params.
     `cpu`/`features` `""` = target default; `b.no-std = true` drops std.
   - `fn editor(req): k1/editor-settings`, primary, editor compiles
-    (`test-on-check`).
+    (`test-on-check`, `check-on-save`, `check-debounce-ms`, `0` = server
+    default).
   - `fn module()` / `fn module(b: k1/build-config)` returns data (`k1/module` in
     builtin.k1): `.0 | .{ library = true, depend = ["sqlite", "./deps/dbx"],
     submodules = [.{ dir = "web", depend = ["store"] }], ignore = ["attic"],

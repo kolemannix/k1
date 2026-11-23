@@ -9,8 +9,8 @@ use crate::compiler::{
 };
 use crate::parse::Interner;
 use crate::plan::{
-    BUILD_FILE_NAME, BuildPlan, PlanMem, PlannedLib, PlannedModule, PlannedParams, PlannedSetup,
-    TextOrigin,
+    BUILD_FILE_NAME, BuildPlan, EditorSettings, PlanMem, PlannedLib, PlannedModule, PlannedParams,
+    PlannedSetup, TextOrigin,
 };
 use crate::vm::k1_types::K1CodeSpan;
 use std::path::PathBuf;
@@ -358,7 +358,15 @@ impl TypedProgram {
         {
             let request_value = self.encode_build_request(&planner.plan, request);
             let settings = self.execute_static_function(fn_id, &[request_value], span)?;
-            planner.plan.editor.test_on_check = self.field_bool(settings, "test-on-check");
+            let check_debounce_ms = self.field_int(settings, "check-debounce-ms");
+            if (check_debounce_ms as i64) < 0 {
+                kbail!(self, span, "check-debounce-ms is negative");
+            }
+            planner.plan.editor = EditorSettings {
+                test_on_check: self.field_bool(settings, "test-on-check"),
+                check_on_save: self.field_bool(settings, "check-on-save"),
+                check_debounce_ms,
+            };
         }
         Ok(self.encode_build_config(&planner.plan, &config))
     }

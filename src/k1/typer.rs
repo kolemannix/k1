@@ -6511,9 +6511,19 @@ impl TypedProgram {
             })
         {
             if expected_struct.fields.is_empty() {
-                kbail!(self, struct_span, "Expected the empty type, got a struct with {} fields", parsed_struct.fields.len())
+                kbail!(
+                    self,
+                    struct_span,
+                    "Expected the empty type, got a struct with {} fields",
+                    parsed_struct.fields.len()
+                )
             } else {
-                kbail!(self, struct_span, "Struct has an unexpected field '{}'", unknown_field.name);
+                kbail!(
+                    self,
+                    struct_span,
+                    "Struct has an unexpected field '{}'",
+                    unknown_field.name
+                );
             }
         }
 
@@ -9233,10 +9243,14 @@ impl TypedProgram {
                         CastType::IntegerUnsignedToFloat
                     }
                 }
-                (Type::Float(from), Type::Float(to)) if is_to_float && to.width() > from.width() => {
+                (Type::Float(from), Type::Float(to))
+                    if is_to_float && to.width() > from.width() =>
+                {
                     CastType::FloatExtend
                 }
-                (Type::Float(from), Type::Float(to)) if is_to_float && to.width() < from.width() => {
+                (Type::Float(from), Type::Float(to))
+                    if is_to_float && to.width() < from.width() =>
+                {
                     CastType::FloatTruncate
                 }
                 _ => {
@@ -12314,14 +12328,13 @@ impl TypedProgram {
                     (lhs, Some(variable_id))
                 } else {
                     let lhs = self.eval_expr(assignment.lhs, ctx.with_no_expected_type())?;
-                    let kind =
-                        self.check_address_of(lhs, None, lhs_span).map_err(|mut e| {
-                            e.message = self.ast.idents.intern(format!(
-                                "Assignment destination must be a place: {}",
-                                self.ident_str(e.message)
-                            ));
-                            e
-                        })?;
+                    let kind = self.check_address_of(lhs, None, lhs_span).map_err(|mut e| {
+                        e.message = self.ast.idents.intern(format!(
+                            "Assignment destination must be a place: {}",
+                            self.ident_str(e.message)
+                        ));
+                        e
+                    })?;
                     let root_variable = match kind {
                         AddressOfKind::StackVariable(v) | AddressOfKind::GlobalVariable(v) => {
                             Some(v)

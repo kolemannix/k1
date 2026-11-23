@@ -92,6 +92,8 @@ pub struct BuildPlan {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EditorSettings {
     pub test_on_check: bool,
+    pub check_on_save: bool,
+    pub check_debounce_ms: u64,
 }
 
 impl BuildPlan {

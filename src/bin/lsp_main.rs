@@ -233,7 +233,7 @@ struct State {
     src_path: RwLock<Option<PathBuf>>,
     workspace_root: RwLock<Option<String>>,
     published_diagnostic_urls: Mutex<HashSet<Url>>,
-    edit_generation: AtomicU32,
+    last_edit: Mutex<Option<tokio::time::Instant>>,
     pending_check: Mutex<Option<CheckRequest>>,
     check_wake: tokio::sync::Notify,
     completion_generation: AtomicU32,
@@ -244,19 +244,26 @@ struct State {
 }
 
 const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
-const CHECK_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(50);
+const CHECK_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
 
 async fn run_check_worker(state: Arc<State>) {
     let mut iteration = 0;
     loop {
         state.check_wake.notified().await;
-        // Debounce: start once edits pause for CHECK_DEBOUNCE
-        loop {
-            let seen = state.edit_generation.load(Ordering::SeqCst);
-            tokio::time::sleep(CHECK_DEBOUNCE).await;
-            if state.edit_generation.load(Ordering::SeqCst) == seen {
+        // Debounce: on-change checks start once the last edit is check-debounce-ms old
+        let settings = state.get_editor_settings();
+        let debounce = match settings.check_debounce_ms {
+            0 => CHECK_DEBOUNCE,
+            ms => std::time::Duration::from_millis(ms),
+        };
+        while !settings.check_on_save {
+            let last_edit = *state.last_edit.lock().unwrap();
+            let Some(last_edit) = last_edit else { break };
+            let deadline = last_edit + debounce;
+            if tokio::time::Instant::now() >= deadline {
                 break;
             }
+            tokio::time::sleep_until(deadline).await;
         }
         let request = state.pending_check.lock().unwrap().take();
         if let Some(request) = request {
@@ -394,7 +401,7 @@ impl Backend {
             src_path: RwLock::new(None),
             workspace_root: RwLock::new(None),
             published_diagnostic_urls: Mutex::new(HashSet::new()),
-            edit_generation: AtomicU32::new(0),
+            last_edit: Mutex::new(None),
             pending_check: Mutex::new(None),
             check_wake: tokio::sync::Notify::new(),
             completion_generation: AtomicU32::new(0),
@@ -408,6 +415,14 @@ impl Backend {
 }
 
 impl State {
+    fn get_editor_settings(&self) -> k1::plan::EditorSettings {
+        self.with_k1(|k1| k1.plan.editor).unwrap_or_default()
+    }
+
+    fn record_edit(&self) {
+        *self.last_edit.lock().unwrap() = Some(tokio::time::Instant::now());
+    }
+
     fn request_check(&self, url: Url, force: bool) {
         {
             let mut pending = self.pending_check.lock().unwrap();
@@ -536,7 +551,6 @@ impl State {
 
     async fn check(&self, request: CheckRequest, iteration: u32) {
         // Retarget: point the program at the request's module unless it already covers it
-        let edit_generation = self.edit_generation.load(Ordering::SeqCst);
         let source_overlay = self.construct_source_overlay();
         let mut versions: HashMap<Url, i32> = HashMap::new();
         for (url, open) in self.open_sources.lock().unwrap().iter() {
@@ -614,7 +628,8 @@ impl State {
                     std::mem::replace(&mut previous.host_program, HostProgram::Absent);
             }
         }
-        let is_superseded = || self.edit_generation.load(Ordering::SeqCst) != edit_generation;
+        let is_superseded =
+            || self.pending_check.lock().unwrap().as_ref().is_some_and(|pending| pending.force);
         if compiled_module.plan.editor.test_on_check
             && compiled_module.error_count() == 0
             && !is_superseded()
@@ -792,8 +807,10 @@ impl LanguageServer for Backend {
         let (ast, _) = parse::parse_standalone(file_url.path().to_string(), &change.text);
         let open = OpenSource { ast, version: params.text_document.version, dirty: true };
         self.open_sources.lock().unwrap().insert(file_url.clone(), open);
-        self.edit_generation.fetch_add(1, Ordering::SeqCst);
-        self.request_check(file_url, true);
+        self.record_edit();
+        if !self.get_editor_settings().check_on_save {
+            self.request_check(file_url, true);
+        }
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -868,7 +885,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let closed = self.open_sources.lock().unwrap().remove(&uri);
         if closed.is_some_and(|open| open.dirty) {
-            self.edit_generation.fetch_add(1, Ordering::SeqCst);
+            self.record_edit();
             self.request_check(uri, true);
         }
     }

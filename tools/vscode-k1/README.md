@@ -24,7 +24,10 @@ If `k1.languageServer.path` is not set, the extension tries:
 
 What the server checks comes from the module's `build.k1`: `fn build(req)` sees
 `req.editor == true` for editor compiles, and an optional
-`fn editor(req: k1/build-request): k1/editor-settings` turns on `test-on-check`.
+`fn editor(req: k1/build-request): k1/editor-settings` sets `test-on-check`,
+`check-on-save` (check only on save, not on every change) and
+`check-debounce-ms` (how long edits must pause before a check; `0` is the
+server default).
 
 ## Development
 

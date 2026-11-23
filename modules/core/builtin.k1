@@ -987,7 +987,11 @@ ns k1 {
     editor: bool,
   }
 
-  type editor-settings = { test-on-check: bool }
+  type editor-settings = {
+    test-on-check: bool,
+    check-on-save: bool,
+    check-debounce-ms: i64,
+  }
 
   type setup-ctx = { build: build-config }
 
