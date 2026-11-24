@@ -106,3 +106,10 @@ fn(test) zero-safe-types() {
   assert(not types/is-zero-safe[{ a: int, b: *int }]())
   assert(not types/id[*int].info().zero-safe)
 }
+
+fn(test) any-get-refuses-another-type() {
+  let count = 7
+  let any = types/make-any(count.&)
+  assert(any.get[int]() is :some held and held.* == 7)
+  assert(any.get[string]() is :none)
+}

@@ -41,6 +41,12 @@ fn make-any[t](t: *t): any {
   .{ type-id = id[t], value = t.as[ptr] }
 }
 
+ns for any {
+  fn get[t](self): ?*t {
+    if self.type-id == id[t] { :some self.value.narrow[*t] } else :none
+  }
+}
+
 fn assert-wrapper-type[wrapper, inner]() {
   let schema-a = types/schema[wrapper]
   let b-type-id = types/id[inner]
